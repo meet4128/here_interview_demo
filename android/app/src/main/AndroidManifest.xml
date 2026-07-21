@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Required for HERE SDK network calls: map tiles, search, routing. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      HERE Positioning requires BOTH fine and coarse location — per the
+      HERE SDK's own docs, coarse alone results in "approximate" precision
+      on Android 12+, which isn't enough for GNSS/cellular/WiFi scans and
+      causes LocationEngine to fail with a MISSING_PERMISSIONS error.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!--
+      Required by HERE's LocationEngine for its WiFi/cellular-assisted
+      positioning (not just plain GPS) — easy to miss since these three
+      aren't the "obvious" location permissions, but the engine needs
+      them regardless.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+
+    <!--
+      Optional, not enforced by HERE SDK — but if granted, HERE SDK uses
+      wake locks so network scans / position calculation aren't
+      interrupted by the device entering power-save mode. Held only for
+      the minimum time needed.
+    -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <application
+        android:label="interview_test_app"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <!--
+              Specifies an Android theme to apply to this Activity as soon
+              as the Android process has started. This theme is visible
+              to the user while the Flutter UI initializes. After that,
+              this theme continues to determine the Window background
+              behind the Flutter UI.
+            -->
+            <meta-data
+                android:name="io.flutter.embedding.android.NormalTheme"
+                android:resource="@style/NormalTheme"
+                />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <!-- Required by Flutter's tooling; do not remove. -->
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+
+        <!--
+          HERE SDK credentials are NOT set here — this project uses the
+          Dart-side `AuthenticationMode.withKeySecret(...)` approach in
+          `HereSdkInitializer` instead (see core/here_sdk/). If your
+          bundled Developer Guide says your exact SDK version expects
+          native meta-data credentials instead, add them here as:
+          <meta-data android:name="com.here.sdk.access_key_id" android:value="YOUR_ACCESS_KEY_ID"/>
+          <meta-data android:name="com.here.sdk.access_key_secret" android:value="YOUR_ACCESS_KEY_SECRET"/>
+          — but don't set both the Dart and native paths at once.
+        -->
+    </application>
+
+    <!--
+      Required to query activities that can process text, see:
+      https://developer.android.com/training/package-visibility and
+      https://developer.android.com/reference/android/content/Intent#ACTION_PROCESS_TEXT.
+      In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+    </queries>
+</manifest>
