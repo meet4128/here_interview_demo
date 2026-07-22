@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:here_sdk/mapview.dart' hide MapError;
+import 'package:here_sdk/routing.dart' as here_routing;
 
 import '../../../../core/di/injection_container.dart';
 import '../../domain/entities/map_camera_position.dart';
@@ -11,9 +12,13 @@ import '../../../search/domain/entities/place_result.dart';
 import '../../../search/presentation/bloc/search_bloc.dart';
 import '../../../search/presentation/bloc/search_event.dart';
 import '../../../search/presentation/bloc/search_state.dart';
+import '../../../routing/domain/entities/route_info.dart';
 import '../../../routing/presentation/bloc/route_bloc.dart';
 import '../../../routing/presentation/bloc/route_event.dart';
 import '../../../routing/presentation/bloc/route_state.dart';
+import '../../../navigation/presentation/bloc/navigation_bloc.dart';
+import '../../../navigation/presentation/bloc/navigation_event.dart';
+import '../../../navigation/presentation/bloc/navigation_state.dart';
 
 class MapPage extends StatelessWidget {
   const MapPage({super.key});
@@ -27,6 +32,7 @@ class MapPage extends StatelessWidget {
         ),
         BlocProvider<SearchBloc>(create: (_) => sl<SearchBloc>()),
         BlocProvider<RouteBloc>(create: (_) => sl<RouteBloc>()),
+        BlocProvider<NavigationBloc>(create: (_) => sl<NavigationBloc>()),
       ],
       child: const _MapView(),
     );
@@ -39,6 +45,37 @@ MapCameraPosition? _currentMapPosition(MapState state) {
   return null;
 }
 
+/// Maps a HERE `ManeuverAction` to a reasonable Material icon. Uses
+IconData _iconForManeuverAction(here_routing.ManeuverAction action) {
+  final name = action.name;
+  if (name == 'depart') return Icons.trip_origin;
+  if (name == 'arrive') return Icons.flag;
+  if (name.contains('UTurn')) return Icons.u_turn_left;
+  if (name.contains('sharpLeft') || name == 'leftTurn') return Icons.turn_left;
+  if (name.contains('sharpRight') || name == 'rightTurn') {
+    return Icons.turn_right;
+  }
+  if (name.contains('slightLeft')) return Icons.turn_slight_left;
+  if (name.contains('slightRight')) return Icons.turn_slight_right;
+  if (name.contains('Roundabout')) return Icons.roundabout_left;
+  if (name.contains('Ramp') || name.contains('Exit') || name.contains('Fork')) {
+    return Icons.merge;
+  }
+  return Icons.straight; // continueOn, and anything else unhandled
+}
+
+String _formatDistance(int meters) {
+  if (meters >= 1000) return '${(meters / 1000).toStringAsFixed(1)} km';
+  return '$meters m';
+}
+
+String _formatDuration(Duration duration) {
+  final hours = duration.inHours;
+  final minutes = duration.inMinutes.remainder(60);
+  if (hours > 0) return '$hours h $minutes min';
+  return '$minutes min';
+}
+
 class _MapView extends StatefulWidget {
   const _MapView();
 
@@ -47,6 +84,8 @@ class _MapView extends StatefulWidget {
 }
 
 class _MapViewState extends State<_MapView> with WidgetsBindingObserver {
+  HereMapController? _controller;
+
   @override
   void initState() {
     super.initState();
@@ -70,7 +109,26 @@ class _MapViewState extends State<_MapView> with WidgetsBindingObserver {
   }
 
   void _onMapCreated(HereMapController controller) {
+    _controller = controller;
     context.read<MapBloc>().add(MapStarted(controller));
+  }
+
+  void _onStartNavigation(RouteInfo route) {
+    final controller = _controller;
+    if (controller == null) return;
+
+    final origin = context.read<MapBloc>().deviceLocation;
+    final destination = route.polyline.last;
+
+    context.read<NavigationBloc>().add(
+      NavigationStarted(
+        controller: controller,
+        originLatitude: origin.latitude,
+        originLongitude: origin.longitude,
+        destinationLatitude: destination.latitude,
+        destinationLongitude: destination.longitude,
+      ),
+    );
   }
 
   @override
@@ -100,7 +158,9 @@ class _MapViewState extends State<_MapView> with WidgetsBindingObserver {
                     .add(const MapLocationSettingsRequested()),
               );
             }
+
             final currentPosition = _currentMapPosition(mapState);
+
             return Stack(
               children: [
                 HereMap(
@@ -109,15 +169,211 @@ class _MapViewState extends State<_MapView> with WidgetsBindingObserver {
                 ),
                 if (mapState is MapSceneLoading)
                   const _LoadingIndicator(label: 'Loading map…'),
-                if (mapState is MapError) _MapErrorCard(message: mapState.message),
+                if (mapState is MapError)
+                  _MapErrorCard(message: mapState.message),
                 if (currentPosition != null)
-                  _SearchOverlay(currentPosition: currentPosition),
+                  BlocBuilder<NavigationBloc, NavigationState>(
+                    builder: (context, navState) {
+                      if (navState is NavigationInitial) {
+                        return Stack(
+                          children: [
+                            _SearchOverlay(currentPosition: currentPosition),
+                            BlocBuilder<RouteBloc, RouteState>(
+                              builder: (context, routeState) =>
+                                  _RouteSummaryCard(
+                                    routeState: routeState,
+                                    onStartNavigation: _onStartNavigation,
+                                  ),
+                            ),
+                          ],
+                        );
+                      }
+                      return _NavigationOverlay(
+                        navState: navState,
+                        onStop: () => context
+                            .read<NavigationBloc>()
+                            .add(const NavigationStopped()),
+                      );
+                    },
+                  ),
               ],
             );
           },
         ),
       ),
     );
+  }
+}
+
+class _RouteSummaryCard extends StatelessWidget {
+  final RouteState routeState;
+  final void Function(RouteInfo route) onStartNavigation;
+
+  const _RouteSummaryCard({
+    required this.routeState,
+    required this.onStartNavigation,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final routeState = this.routeState;
+    Widget? content;
+
+    if (routeState is RouteCalculating) {
+      content = const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          SizedBox(width: 12),
+          Text('Calculating route…'),
+        ],
+      );
+    } else if (routeState is RouteNotFound) {
+      content = const Text('No route could be found between these two points.');
+    } else if (routeState is RouteError) {
+      content = Text('Route failed: ${routeState.message}');
+    } else if (routeState is RouteReady) {
+      final route = routeState.route;
+      content = Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _formatDuration(route.duration),
+                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  _formatDistance(route.lengthInMeters),
+                  style: TextStyle(color: Theme.of(context).colorScheme.outline),
+                ),
+              ],
+            ),
+          ),
+          FilledButton.icon(
+            onPressed: () => onStartNavigation(route),
+            icon: const Icon(Icons.navigation),
+            label: const Text('Start'),
+          ),
+        ],
+      );
+    }
+
+    if (content == null) return const SizedBox.shrink(); // RouteInitial
+
+    return SafeArea(
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Material(
+            elevation: 4,
+            borderRadius: BorderRadius.circular(12),
+            color: Theme.of(context).colorScheme.surface,
+            child: Padding(padding: const EdgeInsets.all(16), child: content),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NavigationOverlay extends StatelessWidget {
+  final NavigationState navState;
+  final VoidCallback onStop;
+
+  const _NavigationOverlay({required this.navState, required this.onStop});
+
+  @override
+  Widget build(BuildContext context) {
+    final navState = this.navState;
+
+    if (navState is NavigationStarting) {
+      return const _LoadingIndicator(label: 'Starting navigation…');
+    }
+
+    if (navState is NavigationRunning) {
+      final instruction = navState.instruction;
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Material(
+            elevation: 4,
+            borderRadius: BorderRadius.circular(12),
+            color: Theme.of(context).colorScheme.primaryContainer,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  Icon(_iconForManeuverAction(instruction.action), size: 32),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '${_formatDistance(instruction.distanceToNextManeuverInMeters)} · ${instruction.roadName}',
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          instruction.instructionText,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    tooltip: 'Stop navigation',
+                    onPressed: onStop,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (navState is NavigationArrived) {
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Material(
+            elevation: 4,
+            borderRadius: BorderRadius.circular(12),
+            color: Theme.of(context).colorScheme.primaryContainer,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  const Icon(Icons.flag, size: 32),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text('You have arrived at your destination.'),
+                  ),
+                  FilledButton(onPressed: onStop, child: const Text('Done')),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (navState is NavigationError) {
+      return _MapErrorCard(message: navState.message);
+    }
+
+    return const SizedBox.shrink();
   }
 }
 
@@ -165,6 +421,7 @@ class _SearchOverlayState extends State<_SearchOverlay> {
         ),
       ),
     );
+
     context.read<RouteBloc>().add(
       RouteRequested(
         originLatitude: origin.latitude,
@@ -176,7 +433,7 @@ class _SearchOverlayState extends State<_SearchOverlay> {
 
     _controller.text = result.title;
     _focusNode.unfocus();
-    _onQueryChanged('');
+    _onQueryChanged(''); // collapses the results list back to SearchInitial
   }
 
   @override

@@ -11,7 +11,6 @@ class RoutingQueryException implements Exception {
   String toString() => 'RoutingQueryException: $message';
 }
 
-/// Thrown when no route could be found between the given points
 class RoutingNoRouteFoundException implements Exception {
   final String message;
   const RoutingNoRouteFoundException(this.message);
@@ -25,7 +24,6 @@ class RoutingDataSource {
 
   const RoutingDataSource(this._routingEngine);
 
-  /// Calculates a car route between the two points
   Future<here_routing.Route> calculateCarRoute({
     required double originLatitude,
     required double originLongitude,
@@ -41,9 +39,9 @@ class RoutingDataSource {
       ),
     ];
 
-    _routingEngine.calculateCarRoute(
+    _routingEngine.calculateRouteWithRoutingOptions(
       waypoints,
-      here_routing.CarOptions(),
+      here_routing.RoutingOptions(),
           (here_routing.RoutingError? error, List<here_routing.Route>? routeList) {
         if (error == here_routing.RoutingError.noRouteFound) {
           completer.completeError(
