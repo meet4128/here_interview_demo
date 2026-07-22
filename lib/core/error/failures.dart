@@ -35,6 +35,7 @@ class MapFailure extends Failure {
   const MapFailure(super.message);
 }
 
+
 /// the device's system-wide Location Services
 class LocationServicesDisabledFailure extends Failure {
   const LocationServicesDisabledFailure(super.message);
